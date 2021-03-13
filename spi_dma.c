@@ -23,16 +23,19 @@
 #include "my_debug.h"
 
 // Passes:
-#define N_TASKS 1
-#define BAUD_RATE 20833333
+//#define N_TASKS 1
+//#define BAUD_RATE 20833333
 
 // Fails
 //#define N_TASKS 2
-//#define BAUD_RATE 5000 * 1000
+//#define BAUD_RATE 6000 * 1000
 
 // Passes
 //#define N_TASKS 2
-//#define BAUD_RATE 2000 * 1000
+//#define BAUD_RATE 2500 * 1000
+
+#define N_TASKS 4
+#define BAUD_RATE 20833333
 
 #define TEST_SIZE 1024
 
@@ -106,7 +109,7 @@ void spi0_dma_isr() { spi_irq_handler(&spi); }
 
 bool my_spi_init(spi_t *this) {
     // The SPI may be shared, protect it
-    this->mutex = xSemaphoreCreateRecursiveMutex();
+    this->mutex = xSemaphoreCreateMutex();
 
     /* Configure component */
     spi_init(this->hw_inst, 100 * 1000);
@@ -170,7 +173,7 @@ bool my_spi_init(spi_t *this) {
 static void spi_lock(spi_t *this) {
     TRACE_PRINTF("%s\n", __FUNCTION__);
     configASSERT(this->mutex);
-    xSemaphoreTakeRecursive(this->mutex, portMAX_DELAY);
+    xSemaphoreTake(this->mutex, portMAX_DELAY);
     this->owner = xTaskGetCurrentTaskHandle();
     gpio_put(LED_PIN, 1);
 }
@@ -178,7 +181,7 @@ static void spi_unlock(spi_t *this) {
     TRACE_PRINTF("%s\n", __FUNCTION__);
     gpio_put(LED_PIN, 0);
     this->owner = 0;
-    xSemaphoreGiveRecursive(this->mutex);
+    xSemaphoreGive(this->mutex);
 }
 // SPI Transfer: Read & Write (simultaneously) on SPI bus
 //   If the data that will be received is not important, pass NULL as rx.
@@ -194,7 +197,7 @@ bool spi_transfer(spi_t *this, const uint8_t *tx, uint8_t *rx, size_t length) {
     if (tx) {
         channel_config_set_read_increment(&this->tx_dma_cfg, true);
     } else {
-        const static uint8_t dummy = SPI_FILL_CHAR;
+        static const uint8_t dummy = SPI_FILL_CHAR;
         tx = &dummy;
         channel_config_set_read_increment(&this->tx_dma_cfg, false);
     }
@@ -258,38 +261,49 @@ static void testTask(void *arg) {
     uint8_t txbuf[TEST_SIZE];
     uint8_t rxbuf[TEST_SIZE];
 
-    for (size_t x = 0; ; ++x) {
-        unsigned seed = task_no + x;
+    for (size_t c = 0;; ++c) {
+        // Introduce some randomness to timing:
+        if (rand() < RAND_MAX / 2) vTaskDelay(pdMS_TO_TICKS(1));
+        unsigned seed = task_no + c;
         unsigned rand_st = seed;
-        for (uint i = 0; i < TEST_SIZE; ++i) {
-            txbuf[i] = rand_r(&rand_st);
-        }
+        for (uint i = 0; i < TEST_SIZE; ++i) txbuf[i] = rand_r(&rand_st);
+
         spi_lock(&spi);
         spi_transfer(&spi, txbuf, rxbuf, TEST_SIZE);
+vTaskDelay(pdMS_TO_TICKS(2));  // Why???
         spi_unlock(&spi);
 
         task_printf("Done. Checking...");
-        if (0 != memcmp(txbuf, rxbuf, TEST_SIZE))
-            for (uint i = 0; i < TEST_SIZE; ++i) {
-                if (rxbuf[i] != txbuf[i]) {
-                    FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
-                         TEST_SIZE, txbuf[i], rxbuf[i]);
-                }
-            }
+        // Has the transmit buffer changed?!
         rand_st = seed;
         for (uint i = 0; i < TEST_SIZE; ++i) {
             uint8_t x = rand_r(&rand_st);
             if (txbuf[i] != x) {
-                FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i, TEST_SIZE,
-                     x, txbuf[i]);
+                uint8_t tmpbuf[TEST_SIZE];
+                unsigned tmp_rand_st = seed;
+                for (uint j = 0; j < TEST_SIZE; ++j)
+                    tmpbuf[j] = rand_r(&tmp_rand_st);
+                compare_buffers_8("Expected:", tmpbuf, "txbuf", txbuf,
+                                  TEST_SIZE);
+                FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
+                     TEST_SIZE, x, txbuf[i]);
             }
         }
+        // Check the receive buffer:
         rand_st = seed;
         for (uint i = 0; i < TEST_SIZE; ++i) {
             uint8_t x = rand_r(&rand_st);
             if (rxbuf[i] != x) {
-                FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i, TEST_SIZE,
-                     x, rxbuf[i]);
+                FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
+                     TEST_SIZE, x, rxbuf[i]);
+            }
+        }
+        // Compare the tx and rx buffers:
+        rand_st = seed;
+        for (uint i = 0; i < TEST_SIZE; ++i) {
+            if (rxbuf[i] != txbuf[i]) {
+                FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
+                     TEST_SIZE, txbuf[i], rxbuf[i]);
             }
         }
         task_printf("All good\n");
@@ -297,7 +311,7 @@ static void testTask(void *arg) {
     vTaskDelete(NULL);
 }
 
-void main() {
+int main() {
     // Enable UART so we can print status output
     stdio_init_all();
 
@@ -309,7 +323,7 @@ void main() {
     uint actual = spi_set_baudrate(spi.hw_inst, BAUD_RATE);
     printf("Actual frequency: %lu\n", (long unsigned)actual);
 
-   for (size_t i = 0; i < N_TASKS; ++i) {
+    for (size_t i = 0; i < N_TASKS; ++i) {
         char buf[16];
         snprintf(buf, sizeof buf, "T%zu", i);
         BaseType_t rc = xTaskCreate(testTask, buf, 1536, (void *)i, 2, NULL);
@@ -318,4 +332,5 @@ void main() {
 
     vTaskStartScheduler();
     configASSERT(!"Can't happen!");
+    return 0;
 }

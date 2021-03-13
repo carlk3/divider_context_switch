@@ -12,6 +12,7 @@
 
 #pragma once
 #include <stdio.h>
+#include <string.h>
 
 void task_printf(const char *pcFormat, ...)
     __attribute__((format(__printf__, 1, 2)));
@@ -31,5 +32,9 @@ void my_assert_func(const char *file, int line, const char *func,
             __asm("bkpt #0");                                          \
         };                                                             \
     }
+
+void hexdump_8(const char *s, const uint8_t *pbytes, size_t nbytes);
+bool compare_buffers_8(const char *s0, const uint8_t *pbytes0, const char *s1,
+                       const uint8_t *pbytes1, const size_t nbytes);
 
 /* [] END OF FILE */

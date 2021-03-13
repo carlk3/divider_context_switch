@@ -14,6 +14,7 @@ add_executable(spi_dma
         spi_dma.c
         my_debug.c
 )
+target_compile_options(spi_dma PRIVATE -Wall -Wextra -Wshadow)
 
 pico_set_program_name(spi_dma "spi_dma")
 pico_set_program_version(spi_dma "0.1")
@@ -31,24 +32,26 @@ add_library(FreeRTOS-Kernel STATIC
         FreeRTOS-Kernel/portable/GCC/ARM_CM0/port.c 
         FreeRTOS-Kernel/portable/MemMang/heap_4.c 
 )
-target_link_libraries(FreeRTOS-Kernel pico_stdlib hardware_timer)
+target_link_libraries(FreeRTOS-Kernel 
+        hardware_timer
+        pico_stdlib 
+)
 target_include_directories(FreeRTOS-Kernel PUBLIC 
         include/ 
         FreeRTOS-Kernel/include 
         FreeRTOS-Kernel/portable/GCC/ARM_CM0
 )
-
 target_include_directories(spi_dma PUBLIC 
         include/ 
         FreeRTOS-Kernel/include 
         FreeRTOS-Kernel/portable/GCC/ARM_CM0
 )
-        
 target_link_libraries(spi_dma 
         FreeRTOS-Kernel
-        pico_stdlib 
         hardware_spi 
         hardware_dma
+        hardware_timer
+        pico_stdlib 
 )
 
 # create map/bin/hex file etc.

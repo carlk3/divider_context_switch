@@ -22,22 +22,30 @@
 #include "semphr.h"
 #include "task.h"
 
-void task_printf(const char *pcFormat, ...) {
-    static SemaphoreHandle_t xSemaphore = NULL;
+static SemaphoreHandle_t xSemaphore;
+static BaseType_t printf_locked;
+static void lock_printf() {
     static StaticSemaphore_t xMutexBuffer;
     static bool initialized;
     if (!__atomic_test_and_set(&initialized, __ATOMIC_SEQ_CST)) {
         xSemaphore = xSemaphoreCreateMutexStatic(&xMutexBuffer);
     }
     configASSERT(xSemaphore);
+    printf_locked = xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(1000));
+}
+static void unlock_printf() {
+    if (pdTRUE == printf_locked) xSemaphoreGive(xSemaphore);
+}
+
+void task_printf(const char *pcFormat, ...) {
     char pcBuffer[256] = {0};
     va_list xArgs;
     va_start(xArgs, pcFormat);
     vsnprintf(pcBuffer, sizeof(pcBuffer), pcFormat, xArgs);
     va_end(xArgs);
-    BaseType_t rc = xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(1000));
+    lock_printf();
     printf("%s: %s", pcTaskGetName(NULL), pcBuffer);
-    if (pdTRUE == rc) xSemaphoreGive(xSemaphore);
+    unlock_printf();
     fflush(stdout);
 }
 void my_assert_func(const char *file, int line, const char *func,
@@ -50,6 +58,35 @@ void my_assert_func(const char *file, int line, const char *func,
     __asm volatile("cpsid i" : : : "memory"); /* Disable global interrupts. */
 	while(1) { __asm("bkpt #0"); }; // Stop in GUI as if at a breakpoint (if debugging, otherwise loop forever)    
 }
+void hexdump_8(const char *s, const uint8_t *pbytes, size_t nbytes) {
+    lock_printf();
+    printf("\n%s: %s(%s, 0x%p, %zu)\n", pcTaskGetName(NULL), __FUNCTION__, s,
+           pbytes, nbytes);
+    fflush(stdout);
+    size_t col = 0; 
+    for (size_t byte_ix = 0; byte_ix < nbytes; ++byte_ix) {        
+        printf("%02hhx ", pbytes[byte_ix]);
+        if (++col > 31) {
+            printf("\n");
+            col = 0;
+        }
+        fflush(stdout);
+    }
+    unlock_printf();
+}
+// nwords is size in bytes
+bool compare_buffers_8(const char *s0, const uint8_t *pbytes0, const char *s1,
+                       const uint8_t *pbytes1, const size_t nbytes) {
+    /* Verify the data. */
+    if (0 != memcmp(pbytes0, pbytes1, nbytes)) {
+        hexdump_8(s0, pbytes0, nbytes);
+        hexdump_8(s1, pbytes1, nbytes);
+        return false;
+    }
+    return true;
+}
+
+/**********  FreeRTOS support stuff ***********/
 
 /* configSUPPORT_STATIC_ALLOCATION is set to 1, so the application must provide
 an implementation of vApplicationGetIdleTaskMemory() to provide the memory that
