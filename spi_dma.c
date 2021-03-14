@@ -51,6 +51,9 @@
 #define TRACE_PRINTF(fmt, args...)
 //#define TRACE_PRINTF task_printf
 
+static uint8_t txbufs[N_TASKS][TEST_SIZE];
+static uint8_t rxbufs[N_TASKS][TEST_SIZE];
+
 // "Class" representing SPIs
 typedef struct {
     spi_inst_t *hw_inst;
@@ -258,19 +261,16 @@ static void testTask(void *arg) {
     TRACE_PRINTF("%s\n", __FUNCTION__);
     unsigned task_no = (unsigned)arg;
 
-    uint8_t txbuf[TEST_SIZE];
-    uint8_t rxbuf[TEST_SIZE];
-
     for (size_t c = 0;; ++c) {
-        // Introduce some randomness to timing:
-        if (rand() < RAND_MAX / 2) vTaskDelay(pdMS_TO_TICKS(1));
+        //// Introduce some randomness to timing:
+        //if (rand() < RAND_MAX / 2) vTaskDelay(pdMS_TO_TICKS(1));
         unsigned seed = task_no + c;
         unsigned rand_st = seed;
-        for (uint i = 0; i < TEST_SIZE; ++i) txbuf[i] = rand_r(&rand_st);
+        for (uint i = 0; i < TEST_SIZE; ++i) txbufs[task_no][i] = rand_r(&rand_st);
 
         spi_lock(&spi);
-        spi_transfer(&spi, txbuf, rxbuf, TEST_SIZE);
-vTaskDelay(pdMS_TO_TICKS(2));  // Why???
+        spi_transfer(&spi, txbufs[task_no], rxbufs[task_no], TEST_SIZE);
+//vTaskDelay(pdMS_TO_TICKS(2));  // Why???
         spi_unlock(&spi);
 
         task_printf("Done. Checking...");
@@ -278,35 +278,47 @@ vTaskDelay(pdMS_TO_TICKS(2));  // Why???
         rand_st = seed;
         for (uint i = 0; i < TEST_SIZE; ++i) {
             uint8_t x = rand_r(&rand_st);
-            if (txbuf[i] != x) {
+            if (txbufs[task_no][i] != x) {
                 uint8_t tmpbuf[TEST_SIZE];
                 unsigned tmp_rand_st = seed;
                 for (uint j = 0; j < TEST_SIZE; ++j)
                     tmpbuf[j] = rand_r(&tmp_rand_st);
-                compare_buffers_8("Expected:", tmpbuf, "txbuf", txbuf,
+                compare_buffers_8("Expected:", tmpbuf, "txbuf", txbufs[task_no], 
                                   TEST_SIZE);
                 FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
-                     TEST_SIZE, x, txbuf[i]);
+                     TEST_SIZE, x, txbufs[task_no][i]);
             }
         }
         // Check the receive buffer:
         rand_st = seed;
         for (uint i = 0; i < TEST_SIZE; ++i) {
             uint8_t x = rand_r(&rand_st);
-            if (rxbuf[i] != x) {
+            if (rxbufs[task_no][i] != x) {
                 FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
-                     TEST_SIZE, x, rxbuf[i]);
+                     TEST_SIZE, x, rxbufs[task_no][i]);
             }
         }
         // Compare the tx and rx buffers:
         rand_st = seed;
         for (uint i = 0; i < TEST_SIZE; ++i) {
-            if (rxbuf[i] != txbuf[i]) {
+            if (rxbufs[task_no][i] != txbufs[task_no][i]) {
                 FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
-                     TEST_SIZE, txbuf[i], rxbuf[i]);
+                     TEST_SIZE, txbufs[task_no][i], rxbufs[task_no][i]);
             }
         }
         task_printf("All good\n");
+        TaskStatus_t xTaskDetails;
+        vTaskGetInfo( /* The handle of the task being queried. */
+                  NULL,
+                  /* The TaskStatus_t structure to complete with information
+                  on xTask. */
+                  &xTaskDetails,
+                  /* Include the stack high water mark value in the
+                  TaskStatus_t structure. */
+                  pdTRUE,
+                  /* Include the task state in the TaskStatus_t structure. */
+                  0 );
+        task_printf("Stack High Water Mark: %hu\n", xTaskDetails.usStackHighWaterMark);
     }  // for
     vTaskDelete(NULL);
 }
