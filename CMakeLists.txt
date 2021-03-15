@@ -48,9 +48,6 @@ target_include_directories(spi_dma PUBLIC
 )
 target_link_libraries(spi_dma 
         FreeRTOS-Kernel
-        hardware_spi 
-        hardware_dma
-        hardware_timer
         pico_stdlib 
 )
 
