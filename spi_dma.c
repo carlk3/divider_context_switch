@@ -27,15 +27,15 @@
 //#define BAUD_RATE 20833333
 
 // Fails
-//#define N_TASKS 2
-//#define BAUD_RATE 6000 * 1000
+#define N_TASKS 2
+#define BAUD_RATE 6000 * 1000
 
 // Passes
 //#define N_TASKS 2
 //#define BAUD_RATE 2500 * 1000
 
-#define N_TASKS 4
-#define BAUD_RATE 20833333
+//#define N_TASKS 4
+//#define BAUD_RATE 20833333
 
 #define TEST_SIZE 1024
 
@@ -46,6 +46,8 @@
 #define SPI_INST spi0
 
 #define LED_PIN 25
+#define DMA_CMPLT_GP 6
+
 #define SPI_FILL_CHAR (0xFF)
 
 #define TRACE_PRINTF(fmt, args...)
@@ -86,6 +88,9 @@ static spi_t spi = {
 void spi_irq_handler(spi_t *this) {
     // Clear the interrupt request.
     dma_hw->ints0 = 1u << this->rx_dma;
+
+    gpio_xor_mask(1 << DMA_CMPLT_GP);
+
     configASSERT(this->owner);
     configASSERT(!dma_channel_is_busy(this->rx_dma));
 
@@ -250,10 +255,14 @@ bool spi_transfer(spi_t *this, const uint8_t *tx, uint8_t *rx, size_t length) {
                     pcTaskGetName(xTaskGetCurrentTaskHandle()), __FUNCTION__);
         return false;
     }
+    gpio_xor_mask(1 << DMA_CMPLT_GP);
+
     dma_channel_wait_for_finish_blocking(this->tx_dma);
     dma_channel_wait_for_finish_blocking(this->rx_dma);
     configASSERT(!dma_channel_is_busy(this->tx_dma));
     configASSERT(!dma_channel_is_busy(this->rx_dma));
+
+    // vTaskDelay(pdMS_TO_TICKS(4));  // Why???
 
     return true;
 }
@@ -263,14 +272,14 @@ static void testTask(void *arg) {
 
     for (size_t c = 0;; ++c) {
         //// Introduce some randomness to timing:
-        //if (rand() < RAND_MAX / 2) vTaskDelay(pdMS_TO_TICKS(1));
+        // if (rand() < RAND_MAX / 2) vTaskDelay(pdMS_TO_TICKS(1));
         unsigned seed = task_no + c;
         unsigned rand_st = seed;
-        for (uint i = 0; i < TEST_SIZE; ++i) txbufs[task_no][i] = rand_r(&rand_st);
+        for (uint i = 0; i < TEST_SIZE; ++i)
+            txbufs[task_no][i] = rand_r(&rand_st);
 
         spi_lock(&spi);
         spi_transfer(&spi, txbufs[task_no], rxbufs[task_no], TEST_SIZE);
-//vTaskDelay(pdMS_TO_TICKS(2));  // Why???
         spi_unlock(&spi);
 
         task_printf("Done. Checking...");
@@ -279,14 +288,9 @@ static void testTask(void *arg) {
         for (uint i = 0; i < TEST_SIZE; ++i) {
             uint8_t x = rand_r(&rand_st);
             if (txbufs[task_no][i] != x) {
-                uint8_t tmpbuf[TEST_SIZE];
-                unsigned tmp_rand_st = seed;
-                for (uint j = 0; j < TEST_SIZE; ++j)
-                    tmpbuf[j] = rand_r(&tmp_rand_st);
-                compare_buffers_8("Expected:", tmpbuf, "txbuf", txbufs[task_no], 
-                                  TEST_SIZE);
-                FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
-                     TEST_SIZE, x, txbufs[task_no][i]);
+                FAIL("txbuf", txbufs[task_no], TEST_SIZE, seed,
+                    "Mismatch at %d/%d: expected %02x, got %02x\n", i, TEST_SIZE,
+                    x, txbufs[task_no][i]);
             }
         }
         // Check the receive buffer:
@@ -294,7 +298,8 @@ static void testTask(void *arg) {
         for (uint i = 0; i < TEST_SIZE; ++i) {
             uint8_t x = rand_r(&rand_st);
             if (rxbufs[task_no][i] != x) {
-                FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
+                FAIL("rxbuf", rxbufs[task_no], TEST_SIZE, seed,
+                     "Mismatch at %d/%d: expected %02x, got %02x\n", i,
                      TEST_SIZE, x, rxbufs[task_no][i]);
             }
         }
@@ -302,23 +307,26 @@ static void testTask(void *arg) {
         rand_st = seed;
         for (uint i = 0; i < TEST_SIZE; ++i) {
             if (rxbufs[task_no][i] != txbufs[task_no][i]) {
-                FAIL("Mismatch at %d/%d: expected %02x, got %02x\n", i,
+                hexdump_8("txbuf", txbufs[task_no], TEST_SIZE);
+                FAIL("rxbuf", rxbufs[task_no], TEST_SIZE, seed,
+                     "Mismatch at %d/%d: expected %02x, got %02x\n", i,
                      TEST_SIZE, txbufs[task_no][i], rxbufs[task_no][i]);
             }
         }
         task_printf("All good\n");
         TaskStatus_t xTaskDetails;
-        vTaskGetInfo( /* The handle of the task being queried. */
-                  NULL,
-                  /* The TaskStatus_t structure to complete with information
-                  on xTask. */
-                  &xTaskDetails,
-                  /* Include the stack high water mark value in the
-                  TaskStatus_t structure. */
-                  pdTRUE,
-                  /* Include the task state in the TaskStatus_t structure. */
-                  0 );
-        task_printf("Stack High Water Mark: %hu\n", xTaskDetails.usStackHighWaterMark);
+        vTaskGetInfo(/* The handle of the task being queried. */
+                     NULL,
+                     /* The TaskStatus_t structure to complete with information
+                     on xTask. */
+                     &xTaskDetails,
+                     /* Include the stack high water mark value in the
+                     TaskStatus_t structure. */
+                     pdTRUE,
+                     /* Include the task state in the TaskStatus_t structure. */
+                     0);
+        task_printf("Stack High Water Mark: %hu\n",
+                    xTaskDetails.usStackHighWaterMark);
     }  // for
     vTaskDelete(NULL);
 }
@@ -331,6 +339,15 @@ int main() {
     printf("SPI DMA example\n");
 
     my_spi_init(&spi);
+
+    gpio_init(DMA_CMPLT_GP);
+    gpio_set_dir(DMA_CMPLT_GP, GPIO_OUT);
+    gpio_init(7);  // Task 0
+    gpio_set_dir(7, GPIO_OUT);
+    gpio_init(8);  // Task 1
+    gpio_set_dir(8, GPIO_OUT);
+    gpio_init(9);  // Trigger
+    gpio_set_dir(9, GPIO_OUT);
 
     uint actual = spi_set_baudrate(spi.hw_inst, BAUD_RATE);
     printf("Actual frequency: %lu\n", (long unsigned)actual);

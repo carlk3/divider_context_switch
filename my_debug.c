@@ -12,6 +12,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdlib.h>
 //
 #include "hardware/timer.h"
 #include "pico/stdio.h"
@@ -21,6 +22,8 @@
 #include "my_debug.h"
 #include "semphr.h"
 #include "task.h"
+//
+#include "my_debug.h"
 
 static SemaphoreHandle_t xSemaphore;
 static BaseType_t printf_locked;
@@ -41,12 +44,12 @@ void task_printf(const char *pcFormat, ...) {
     char pcBuffer[256] = {0};
     va_list xArgs;
     va_start(xArgs, pcFormat);
-    vsnprintf(pcBuffer, sizeof(pcBuffer), pcFormat, xArgs);
+    vsnprintf(pcBuffer, sizeof pcBuffer, pcFormat, xArgs);
     va_end(xArgs);
     lock_printf();
     printf("%s: %s", pcTaskGetName(NULL), pcBuffer);
-    unlock_printf();
     fflush(stdout);
+    unlock_printf();
 }
 void my_assert_func(const char *file, int line, const char *func,
                     const char *pred) {
@@ -56,15 +59,18 @@ void my_assert_func(const char *file, int line, const char *func,
     fflush(stdout);
     vTaskSuspendAll();
     __asm volatile("cpsid i" : : : "memory"); /* Disable global interrupts. */
-	while(1) { __asm("bkpt #0"); }; // Stop in GUI as if at a breakpoint (if debugging, otherwise loop forever)    
+    while (1) {
+        __asm("bkpt #0");
+    };  // Stop in GUI as if at a breakpoint (if debugging, otherwise loop
+        // forever)
 }
 void hexdump_8(const char *s, const uint8_t *pbytes, size_t nbytes) {
     lock_printf();
     printf("\n%s: %s(%s, 0x%p, %zu)\n", pcTaskGetName(NULL), __FUNCTION__, s,
            pbytes, nbytes);
     fflush(stdout);
-    size_t col = 0; 
-    for (size_t byte_ix = 0; byte_ix < nbytes; ++byte_ix) {        
+    size_t col = 0;
+    for (size_t byte_ix = 0; byte_ix < nbytes; ++byte_ix) {
         printf("%02hhx ", pbytes[byte_ix]);
         if (++col > 31) {
             printf("\n");
@@ -141,23 +147,64 @@ void vApplicationGetTimerTaskMemory(StaticTask_t **ppxTimerTaskTCBBuffer,
     configTIMER_TASK_STACK_DEPTH is specified in words, not bytes. */
     *pulTimerTaskStackSize = configTIMER_TASK_STACK_DEPTH;
 }
-void vApplicationStackOverflowHook( TaskHandle_t xTask, char *pcTaskName ) {
-	/* The stack space has been exceeded for a task, considering allocating more. */
-	printf("\nOut of stack space!\n");
-	printf(pcTaskGetName(NULL));
-	printf("\n");
-	printf("\nOut of stack space! Task: %p %s\n", xTask, pcTaskName);
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName) {
+    /* The stack space has been exceeded for a task, considering allocating
+     * more. */
+    printf("\nOut of stack space!\n");
+    printf(pcTaskGetName(NULL));
+    printf("\n");
+    printf("\nOut of stack space! Task: %p %s\n", xTask, pcTaskName);
     __asm volatile("cpsid i" : : : "memory"); /* Disable global interrupts. */
-	vTaskSuspendAll();
-	while(1) { __asm("bkpt #0"); }; // Stop in GUI as if at a breakpoint (if debugging, otherwise loop forever)    
+    vTaskSuspendAll();
+    while (1) {
+        __asm("bkpt #0");
+    };  // Stop in GUI as if at a breakpoint (if debugging, otherwise loop
+        // forever)
 }
 void vApplicationMallocFailedHook(void) {
     printf("\nMalloc failed!\n");
     printf("\nMalloc failed! Task: %s\n", pcTaskGetName(NULL));
     __asm volatile("cpsid i" : : : "memory"); /* Disable global interrupts. */
     vTaskSuspendAll();
-	while(1) { __asm("bkpt #0"); }; // Stop in GUI as if at a breakpoint (if debugging, otherwise loop forever)    
+    while (1) {
+        __asm("bkpt #0");
+    };  // Stop in GUI as if at a breakpoint (if debugging, otherwise loop
+        // forever)
 }
 
+void fail_func(const char *file, const int line, const char *function,
+               const char *buf_name, uint8_t buf[], size_t buf_sz,
+               unsigned seed, const char *fmt, ...) {
+    gpio_put(9, 1);  // Trigger
+    char pcBuffer[256] = {0};
+    int n = snprintf(pcBuffer, sizeof pcBuffer, "%s:%d: %s\n: ", file, line,
+                     function);
+    va_list xArgs;
+    va_start(xArgs, fmt);
+    vsnprintf(pcBuffer + n, sizeof pcBuffer - n, fmt, xArgs);
+    va_end(xArgs);
+    lock_printf();
+    fflush(stdout);
+    printf("%s: %s", pcTaskGetName(NULL), pcBuffer);
+    hexdump_8(buf_name, buf, buf_sz);
+    printf("Expected:\n");
+    unsigned rand_st = seed;
+    size_t col = 0;
+    for (size_t byte_ix = 0; byte_ix < buf_sz; ++byte_ix) {
+        uint8_t x = rand_r(&rand_st);
+        printf("%02hhx ", x);
+        if (++col > 31) {
+            printf("\n");
+            col = 0;
+        }
+        fflush(stdout);
+    }
+    unlock_printf();
+    vTaskSuspendAll();
+    __asm volatile("cpsid i" : : : "memory");
+    while (1) {
+        __asm("bkpt #0");
+    };
+}
 
 /* [] END OF FILE */
