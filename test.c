@@ -20,12 +20,7 @@
 //#define N_TASKS 1
 
 // Fails
-#define N_TASKS 2
-
-// Passes
-//#define N_TASKS 2
-
-//#define N_TASKS 4
+#define N_TASKS 4
 
 #define TEST_SIZE 1024
 
@@ -91,7 +86,7 @@ int main() {
     // Enable UART so we can print status output
     stdio_init_all();
 
-    printf("\033[2J\033[H");  // Clear Screen
+    //printf("\033[2J\033[H");  // Clear Screen
     printf("example\n");
 
     gpio_init(7);  // Task 0
